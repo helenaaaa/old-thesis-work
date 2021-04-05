@@ -1,0 +1,587 @@
+import os
+import ast
+from ast import literal_eval
+import tokenize
+import string
+import collections
+from collections import Counter
+import math
+import Utilities
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+import scipy.cluster.hierarchy as sch
+import scipy.spatial.distance as ssd
+from scipy.cluster.hierarchy import dendrogram, linkage, fclusterdata
+from numpy.random import rand
+from sklearn.metrics.pairwise import euclidean_distances
+import sys
+from itertools import groupby
+import matplotlib.patches as mpatches
+import datetime
+import seaborn as sns
+
+Utilities.directory()
+sys.setrecursionlimit(100000)
+np.set_printoptions(threshold=sys.maxsize)
+
+EucDict = {}
+Distances = {}
+ClusterIDs = {}
+ColourThreshold = 0
+Dendrogram = []
+
+def DecideColour(labels, Binary):
+	print("decide colours")
+	Utilities.t()
+	labels = pd.DataFrame(labels)
+	Colours = {}
+	palette = sns.color_palette()
+	if Binary == "False":
+		for L in labels:
+			if L == "JW":
+				Colours[L] = palette[1]
+			if L == "SF":
+				Colours[L] = palette[2]
+			if L == "IC":
+				Colours[L] = palette[4]
+			if L == "PH":
+				Colours[L] = palette[5]
+			if L == "FT":
+				Colours[L] = palette[6]
+			if L == "FE":
+				Colours[L] = palette[7]
+	if Binary == "True":	
+		for L in labels:
+			if L in Bad:
+				Colours[L] = palette[3]
+			if L in Benign:
+				Colours[L] = palette[0]
+	Colours = pd.Series(Colours)
+	Colours.head()
+	return Colours
+
+def NumberColours(labels, Colours):
+	print("number colours")
+	Utilities.t()
+	NumberedColours = {}
+	for i, l in enumerate(labels):
+		NumberedColours[i] = Colours[l]
+	
+	return NumberedColours
+
+def LinkColours(NumberedColours, Links):
+	print("link colours")
+	Utilities.t()
+	DefaultColour = "#808080"	# color the link red if the children have two different colors (or both are already red but then they "match")
+	NewColours = {**NumberedColours}	# initialize the link color dict with the colors from the original n clusters for convenient lookup
+	
+	for i, l in enumerate(Links, len(NumberedColours)):
+		c1 = NewColours[int(l[0])]  # color from first cluster
+		c2 = NewColours[int(l[1])]  # color from second cluster
+		if c1 == c2:            # both clusters have the same color
+			c = c1              # use the cluster color
+		else:                   # cluster colors differ
+			c =  DefaultColour        # color the link red
+		NewColours[i] = c           # set the color of the new n-1 links in the color dictionary
+
+	return NewColours
+
+def line(N, M, Binary):
+	print("line placement")
+	Utilities.t()
+	if Binary == "False" and N == 500 and M == "Euc":
+		ColourThreshold = 100 #100 gives 6
+	if Binary == "False" and N == 500 and M == "Bur":
+		ColourThreshold = 1.6 #1.5 gives 6 ***
+	if Binary == "False" and N == 1000 and M == "Euc":
+		ColourThreshold = 121 #121 gives 6
+	if Binary == "False" and N == 1000 and M == "Bur":
+		ColourThreshold = 1.3 #1.3 gives 6
+
+	if Binary == "True" and N == 500 and M == "Euc":
+		ColourThreshold = 165
+	if Binary == "True" and N == 500 and M == "Bur":
+		ColourThreshold = 3
+	if Binary == "True" and N == 1000 and M == "Euc":
+		ColourThreshold = 180
+	if Binary == "True" and N == 1000 and M == "Bur":
+		ColourThreshold = 2.7
+	return ColourThreshold
+
+def title(N, M, Binary):
+	print("Title")
+	Utilities.t()
+	if M == "Euc":
+		A = "Euclidean Distance"
+	if M == "Bur":
+		A = "Burrow's Delta"
+	if Binary == "False":
+		B = "for All Six Groups"
+	if Binary == "True":
+		B = "for the Two Meta Groups"
+	Title = "Denrogram of " + str(A) + " with " + str(N) + " Features " + str(B) + "."
+	return Title
+		
+def legend(Binary):	
+	if Binary == "False":
+		JW_patch = mpatches.Patch(color="#ff0000", label="Jehova's Witness", lw=4)
+		SF_patch = mpatches.Patch(color="#1c780b", label="White Supremacists", lw=4)
+		IC_patch = mpatches.Patch(color="#ea14d5", label="Incels", lw=4)
+		PH_patch = mpatches.Patch(color="#402eea", label="Car Enthusiasts", lw=4)
+		FT_patch = mpatches.Patch(color="#08fffb", label="Travel Enthusiasts", lw=4)
+		FE_patch = mpatches.Patch(color="#d5aa56", label="Flat Earthers", lw=4)
+		MM_patch = mpatches.Patch(color="#808080", label="Mismatched Pair", lw=4)
+		Legend = [FE_patch, SF_patch, IC_patch, FT_patch, JW_patch, PH_patch, MM_patch]
+	if Binary == "True":	
+		BA_patch = mpatches.Patch(color="#e81c2a", label="Bad Actors", lw=4)
+		BN_patch = mpatches.Patch(color="#1155cc", label="Control", lw=4)
+		MM_patch = mpatches.Patch(color="#808080", label="Mismatched Pair", lw=4)
+		Legend = [BA_patch, BN_patch, MM_patch]
+	return Legend
+			
+def DendoPlot(Data, N, M, Binary, Colours):
+	print("plot")
+	Utilities.t()
+	global Count
+	Title = title(N, M, Binary)
+#	ColourThreshold = line(N, M, Binary)
+	keys = [sorted(k) for k in Data.keys()]
+	values = Data.values()
+	sorted_keys, distances = zip(*sorted(zip(keys, values)))
+	Links = linkage(distances, 'ward')
+	labels = sorted(set([key[0] for key in sorted_keys] + [sorted_keys[-1][-1]]))
+	if Colours == True:
+		Colours = DecideColour(labels, Binary)
+		NumberedColours = NumberColours(labels, Colours)
+		NewColours = LinkColours(NumberedColours, Links)
+		Dendrogram = dendrogram(Links, color_threshold=None, leaf_rotation=90, leaf_font_size=8, link_color_func=lambda x: NewColours[x]) # orientation='left',
+#		Legend = legend(Binary)
+	if Colours == False:
+		Dendrogram = dendrogram(Links, labels=labels, leaf_rotation=90, leaf_font_size=8, color_threshold=ColourThreshold) # orientation='left',
+#		Dendrogram = dendrogram(Links, labels=labels, leaf_rotation=90, leaf_font_size=8)
+		Legend = []
+#	sns.clustermap(Links, labels=labels, method='average', figsize=(10, 10), cbar_kws=None, row_cluster=True, col_cluster=True, row_linkage='ward', col_linkage=None, row_colors=None, col_colors=None, mask=None, dendrogram_ratio=0.2, colors_ratio=0.03, cbar_pos=(0.02, 0.8, 0.05, 0.18), tree_kws=None, **kwargs)
+	sns.clustermap(Links)
+	plt.axhline(y=ColourThreshold)
+	plt.title(Title)
+	plt.xlabel('Users')
+	plt.ylabel('Distance')
+	if N == 1000:
+		if M == "Bur":
+			plt.legend(handles=Legend)
+	x = datetime.datetime.now()
+	plt.show()
+#	plt.savefig("DendoPlot" + str(M) + str(N) + str(Binary) + str(x), orientation = 'landscape')#, figsize=(8.27, 11.69, dpi=100))
+	if Colours == False:
+		print("loop colours called")
+		ClusterDict = GetGroups(N, M, Binary, Dendrogram)
+		Groups = ClusterStats(ClusterDict, Binary)
+		Utilities.WriteFile(Groups, "GroupsInClusters" + str(M) + str(N) + str(Binary) + ".txt")
+	if Colours == True:
+		Utilities.WriteFile(Dendrogram, "Dendrogram" + str(M) + str(N) + str(Binary) + ".txt")
+	
+def GetGroups(N, M, Binary, Dendrogram):
+	global ColourThreshold
+	global Count
+	print("getting clusters")
+	Utilities.t()
+	ClusterDict = {}
+	print("get groups")
+	Utilities.t()
+	ivl = Dendrogram['ivl']
+	Colours = Dendrogram['color_list']
+	ColourList = set(Colours)
+	groups = zip(ivl, Colours)
+	groups = list(groups)
+	for g in groups:
+		colour = g[1]
+		user = g[0]
+		if colour not in ClusterDict:
+			ClusterDict[colour] = [user]
+		if colour in ClusterDict:
+			ClusterDict[colour].append(user)
+	return ClusterDict
+
+def ClusterStats(ClusterDict, Binary):
+	print("getting groups")
+	Utilities.t()
+	BigGroupDict = {}
+	for i in ClusterDict.items():
+		Colour = i[0]
+		Users = i[1]
+		if Binary == "False":
+			if Colour not in BigGroupDict:
+				BigGroupDict[Colour] = {'IC': 0, 'JW': 0, 'FT': 0, 'FE': 0, 'PH': 0, 'SF':0}
+				for User in Users:
+					prefix = User[0:2]
+					BigGroupDict[Colour][prefix] += 1
+		if Binary == "True":
+			if Colour not in BigGroupDict:
+				BigGroupDict[Colour] = {'BA': 0, 'BN': 0} #bad actor and benign
+				for User in Users:
+					prefix = User[0:2]
+					if prefix == "JW":
+						BigGroupDict[Colour]['BA'] += 1
+					if prefix == "SF":
+						BigGroupDict[Colour]['BA'] += 1
+					if prefix == "IC":
+						BigGroupDict[Colour]['BA'] += 1
+					if prefix == "FE":
+						BigGroupDict[Colour]['BA'] += 1
+					if prefix == "FT":
+						BigGroupDict[Colour]['BN'] += 1
+					if prefix == "PH":
+						BigGroupDict[Colour]['BN'] += 1
+						
+	return BigGroupDict
+	
+if __name__ == '__main__':
+	print("dendrogram called ")
+	Utilities.t()
+	M = sys.argv[1]
+	N = int(sys.argv[2])
+	Binary = sys.argv[3]
+	Dict = Utilities.LoadTexts(str(M) + "Distances" + str(N) + ".txt")	
+	Dendrogram = DendoPlot(Dict, N, M, Binary, False)
+	Dendrogram = DendoPlot(Dict, N, M, Binary, True)
+	print("dendrogram completed")
+	Utilities.t()
+
+
+import os
+import ast
+from ast import literal_eval
+import tokenize
+import string
+import collections
+from collections import Counter
+import math
+import Utilities
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+import scipy.cluster.hierarchy as sch
+import scipy.spatial.distance as ssd
+from scipy.cluster.hierarchy import dendrogram, linkage, fclusterdata
+from numpy.random import rand
+from sklearn.metrics.pairwise import euclidean_distances
+import sys
+from itertools import groupby
+import matplotlib.patches as mpatches
+
+Utilities.directory()
+sys.setrecursionlimit(100000)
+np.set_printoptions(threshold=sys.maxsize)
+
+EucDict = {}
+Distances = {}
+ClusterIDs = {}
+Dendrogram = []
+
+def DecideColour(labels, Binary):
+	print("decide colours")
+	Utilities.t()
+	Colours = {}
+	if Binary == "False":
+		for L in labels:
+			if "JW" in L:
+				Colours[L] = "#ff0000"
+			elif "SF" in L:
+				Colours[L] = "#1c780b"
+			elif "IC" in L:
+				Colours[L] = "#ea14d5"
+			elif "PH" in L:
+				Colours[L] = "#402eea"
+			elif "FT" in L:
+				Colours[L] = "#08fffb"
+			elif "FE" in L:
+				Colours[L] = "#d5aa56"
+	if Binary == "True":	
+		for L in labels:
+			if "JW" in L:
+				Colours[L] = "#e81c2a"
+			elif "SF" in L:
+				Colours[L] = "#e81c2a"
+			elif "IC" in L:
+				Colours[L] = "#e81c2a"
+			elif "PH" in L:
+				Colours[L] = "#1155cc"
+			elif "FT" in L:
+				Colours[L] = "#1155cc"
+			elif "FE" in L:
+				Colours[L] = "#e81c2a"
+	return Colours
+
+def NumberColours(labels, Colours):
+	print("number colours")
+	Utilities.t()
+	NumberedColours = {}
+	for i, l in enumerate(labels):
+		NumberedColours[i] = Colours[l]
+	
+	return NumberedColours
+
+def LinkColours(NumberedColours, Links):
+	print("link colours")
+	Utilities.t()
+	DefaultColour = "#808080"	# color the link red if the children have two different colors (or both are already red but then they "match")
+	NewColours = {**NumberedColours}	# initialize the link color dict with the colors from the original n clusters for convenient lookup
+	
+	for i, l in enumerate(Links, len(NumberedColours)):
+		c1 = NewColours[int(l[0])]  # color from first cluster
+		c2 = NewColours[int(l[1])]  # color from second cluster
+		if c1 == c2:            # both clusters have the same color
+			c = c1              # use the cluster color
+		else:                   # cluster colors differ
+			c =  DefaultColour        # color the link red
+		NewColours[i] = c           # set the color of the new n-1 links in the color dictionary
+
+	return NewColours
+
+def line(N, M, Binary):
+	print("line placement")
+	Utilities.t()
+	ColourThreshold = Utilities.LoadTexts(str(M) + str(N) + str(Binary) + "ColourThreshold.txt")
+	return ColourThreshold
+	
+def title(N, M, Binary):
+	print("Title")
+	Utilities.t()
+	if M == "Euc":
+		A = "Euclidean Distance"
+	if M == "Bur":
+		A = "Burrow's Delta"
+	if Binary == "False":
+		B = "for All Six Groups"
+	if Binary == "True":
+		B = "for the Two Meta Groups"
+	Title = "Denrogram of " + str(A) + " with " + str(N) + " Features " + str(B) + "."
+	return Title
+		
+def legend(Binary):	
+	if Binary == "False":
+		JW_patch = mpatches.Patch(color="#ff0000", label="Jehova's Witness", lw=4)
+		SF_patch = mpatches.Patch(color="#1c780b", label="White Supremacists", lw=4)
+		IC_patch = mpatches.Patch(color="#ea14d5", label="Incels", lw=4)
+		PH_patch = mpatches.Patch(color="#402eea", label="Car Enthusiasts", lw=4)
+		FT_patch = mpatches.Patch(color="#08fffb", label="Travel Enthusiasts", lw=4)
+		FE_patch = mpatches.Patch(color="#d5aa56", label="Flat Earthers", lw=4)
+		MM_patch = mpatches.Patch(color="#808080", label="Mismatched Pair", lw=4)
+		Legend = [FE_patch, SF_patch, IC_patch, FT_patch, JW_patch, PH_patch, MM_patch]
+	if Binary == "True":	
+		BA_patch = mpatches.Patch(color="#e81c2a", label="Bad Actors", lw=4)
+		BN_patch = mpatches.Patch(color="#1155cc", label="Control", lw=4)
+		MM_patch = mpatches.Patch(color="#808080", label="Mismatched Pair", lw=4)
+		Legend = [BA_patch, BN_patch, MM_patch]
+	return Legend
+			
+def DendoPlot(Data, N, M, Binary):
+	print("plot")
+	Utilities.t()
+	Title = title(N, M, Binary)
+	ColourThreshold = line(N, M, Binary)
+	keys = [sorted(k) for k in Data.keys()]
+	values = Data.values()
+	sorted_keys, distances = zip(*sorted(zip(keys, values)))
+	Links = linkage(distances, 'ward')
+	labels = sorted(set([key[0] for key in sorted_keys] + [sorted_keys[-1][-1]]))
+	Colours = DecideColour(labels, Binary)
+	NumberedColours = NumberColours(labels, Colours)
+	NewColours = LinkColours(NumberedColours, Links)
+	Dendrogram = dendrogram(Links, color_threshold=None, leaf_rotation=90, leaf_font_size=8, link_color_func=lambda x: NewColours[x])
+	Legend = legend(Binary)
+	plt.axhline(y=ColourThreshold)
+	plt.title(Title)
+	plt.xlabel('Users')
+	plt.ylabel('Distance')
+	if N == 1000:
+		if M == "Bur":
+			plt.legend(handles=Legend)
+	plt.savefig("DendoPlot" + str(M) + str(N) + str(Binary) + "colours", orientation = 'landscape')#, figsize=(8.27, 11.69, dpi=100))
+	Utilities.WriteFile(Dendrogram, "Dendrogram" + str(M) + str(N) + str(Binary) + "Colours.txt")
+	
+if __name__ == '__main__':
+	print("dendrogram called ")
+	Utilities.t()
+	M = sys.argv[1]
+	N = int(sys.argv[2])
+	Binary = sys.argv[3]
+	Dict = Utilities.LoadTexts(str(M) + "Distances" + str(N) + ".txt")	
+	Dendrogram = DendoPlot(Dict, N, M, Binary)
+	print("dendrogram completed")
+	Utilities.t()
+
+
+
+
+import os
+import ast
+from ast import literal_eval
+import tokenize
+import string
+import collections
+from collections import Counter
+import math
+import Utilities
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+import scipy.cluster.hierarchy as sch
+import scipy.spatial.distance as ssd
+from scipy.cluster.hierarchy import dendrogram, linkage, fclusterdata
+from numpy.random import rand
+from sklearn.metrics.pairwise import euclidean_distances
+import sys
+from itertools import groupby
+import matplotlib.patches as mpatches
+
+Utilities.directory()
+sys.setrecursionlimit(100000)
+np.set_printoptions(threshold=sys.maxsize)
+
+def line(N, M, Binary):
+	print("line placement")
+	Utilities.t()
+	if Binary == "False" and N == 500 and M == "Euc":
+		ColourThreshold = 100 #100 gives 6
+	if Binary == "False" and N == 500 and M == "Bur":
+		ColourThreshold = 1.6 #1.5 gives 6 ***
+	if Binary == "False" and N == 1000 and M == "Euc":
+		ColourThreshold = 121 #121 gives 6
+	if Binary == "False" and N == 1000 and M == "Bur":
+		ColourThreshold = 1.3 #1.3 gives 6
+
+	if Binary == "True" and N == 500 and M == "Euc":
+		ColourThreshold = 165
+	if Binary == "True" and N == 500 and M == "Bur":
+		ColourThreshold = 3
+	if Binary == "True" and N == 1000 and M == "Euc":
+		ColourThreshold = 180
+	if Binary == "True" and N == 1000 and M == "Bur":
+		ColourThreshold = 2.7
+	return ColourThreshold
+
+def legend(Binary):	
+	if Binary == "False":
+		JW_patch = mpatches.Patch(color="#ff0000", label="Jehova's Witness", lw=4)
+		SF_patch = mpatches.Patch(color="#1c780b", label="White Supremacists", lw=4)
+		IC_patch = mpatches.Patch(color="#ea14d5", label="Incels", lw=4)
+		PH_patch = mpatches.Patch(color="#402eea", label="Car Enthusiasts", lw=4)
+		FT_patch = mpatches.Patch(color="#08fffb", label="Travel Enthusiasts", lw=4)
+		FE_patch = mpatches.Patch(color="#d5aa56", label="Flat Earthers", lw=4)
+		MM_patch = mpatches.Patch(color="#808080", label="Mismatched Pair", lw=4)
+		Legend = [FE_patch, SF_patch, IC_patch, FT_patch, JW_patch, PH_patch, MM_patch]
+	if Binary == "True":	
+		BA_patch = mpatches.Patch(color="#e81c2a", label="Bad Actors", lw=4)
+		BN_patch = mpatches.Patch(color="#1155cc", label="Control", lw=4)
+		MM_patch = mpatches.Patch(color="#808080", label="Mismatched Pair", lw=4)
+		Legend = [BA_patch, BN_patch, MM_patch]
+	return Legend
+
+def title(N, M, Binary):
+	print("Title")
+	Utilities.t()
+	if M == "Euc":
+		A = "Euclidean Distance"
+	if M == "Bur":
+		A = "Burrow's Delta"
+	if Binary == "False":
+		B = "for All Six Groups"
+	if Binary == "True":
+		B = "for the Two Meta Groups"
+	Title = "Denrogram of " + str(A) + " with " + str(N) + " Features " + str(B) + "."
+	return Title
+
+def GetGroups(N, M, Binary):
+	ClusterDict = {}
+	print("get groups")
+	Utilities.t()
+	text = Utilities.LoadTexts("Dendrogram" + str(M) + str(N) + str(Binary) + ".txt")
+	ivl = text['ivl']
+	Colours = text['color_list']
+	ColourList = set(Colours)
+	print("Colours: " + str(len(ColourList)))
+	print(ColourList)
+	groups = zip(ivl, Colours)
+	groups = list(groups)
+	for g in groups:
+		colour = g[1]
+		user = g[0]
+		if colour not in ClusterDict:
+			ClusterDict[colour] = [user]
+		if colour in ClusterDict:
+			ClusterDict[colour].append(user)
+	return ClusterDict
+
+def ClusterStats(ClusterDict, Binary):
+	print("getting groups")
+	Utilities.t()
+	BigGroupDict = {}
+	for i in ClusterDict.items():
+		print(str(i[0]) + " : " + str(len(i[1])))
+		Colour = i[0]
+		Users = i[1]
+		if Binary == "False":
+			if Colour not in BigGroupDict:
+				BigGroupDict[Colour] = {'IC': 0, 'JW': 0, 'FT': 0, 'FE': 0, 'PH': 0, 'SF':0}
+				for User in Users:
+					prefix = User[0:2]
+					BigGroupDict[Colour][prefix] += 1
+		if Binary == "True":
+			if Colour not in BigGroupDict:
+				BigGroupDict[Colour] = {'BA': 0, 'BN': 0} #bad actor and benign
+				for User in Users:
+					prefix = User[0:2]
+					if prefix == "JW":
+						BigGroupDict[Colour]['BA'] += 1
+					if prefix == "SF":
+						BigGroupDict[Colour]['BA'] += 1
+					if prefix == "IC":
+						BigGroupDict[Colour]['BA'] += 1
+					if prefix == "FE":
+						BigGroupDict[Colour]['BA'] += 1
+					if prefix == "FT":
+						BigGroupDict[Colour]['BN'] += 1
+					if prefix == "PH":
+						BigGroupDict[Colour]['BN'] += 1
+						
+	return BigGroupDict
+
+def DendoPlot(Data, N, M, Binary):
+	print("plot")
+	Utilities.t()
+	Title = title(N, M, Binary)
+	ColourThreshold = line(N, M, Binary)
+	keys = [sorted(k) for k in Data.keys()]
+	values = Data.values()
+	sorted_keys, distances = zip(*sorted(zip(keys, values)))
+	Links = linkage(distances, 'ward')
+	labels = sorted(set([key[0] for key in sorted_keys] + [sorted_keys[-1][-1]]))
+	Dendrogram = dendrogram(Links, labels=labels, leaf_rotation=90, leaf_font_size=8, color_threshold=ColourThreshold)
+	Utilities.WriteFile(Dendrogram, "Dendrogram" + str(M) + str(N) + str(Binary) + "Groups.txt")
+	Legend = []
+	plt.axhline(y=ColourThreshold)
+	plt.title(Title)
+	plt.xlabel('Users')
+	plt.ylabel('Distance')
+	if N == 1000:
+		if M == "Bur":
+			Legend = legend(Binary)
+			plt.legend(handles=Legend)
+	plt.savefig("DendoPlot" + str(M) + str(N) + str(Binary) + "Groups", orientation = 'landscape')#, figsize=(8.27, 11.69, dpi=100))
+	ClusterDict = GetGroups(N, M, Binary)
+	Groups = ClusterStats(ClusterDict, Binary)
+	Utilities.WriteFile(Groups, "GroupsInClusters" + str(M) + str(N) + str(Binary) + ".txt")
+	
+if __name__ == '__main__':
+	print("dendrogram called ")
+	Utilities.t()
+	M = sys.argv[1]
+	N = int(sys.argv[2])
+	Binary = sys.argv[3]
+	Dict = Utilities.LoadTexts(str(M) + "Distances" + str(N) + ".txt")
+	print("dictloaded")	
+	Dendrogram = DendoPlot(Dict, N, M, Binary)
+	print("dendrogram completed")
+	Utilities.t()
